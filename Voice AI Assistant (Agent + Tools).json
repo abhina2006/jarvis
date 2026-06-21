@@ -1,0 +1,266 @@
+{
+  "name": "Voice AI Assistant (Agent + Tools)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "voice-agent",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "e230269a-f740-42d5-a969-56053209e3c0",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "voice-agent"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $json.body.message }}",
+        "options": {
+          "systemMessage": "When user asks about current events, news, recent information or anything time-sensitive, always use the search tool to find the latest information. You are a helpful voice assistant. Keep replies short, plain, and natural so they can be read aloud (no markdown, no asterisks, no bullet symbols).\n\nYou have tools:\n- get_weather: call it when the user asks about weather. Pass the city/place name.\n- create_todo: call it when the user asks to add a todo, make a task, or remember something to do. Pass the task text.\n\nWhen a tool returns a result, summarise it in one friendly sentence. If no tool is needed, just answer directly."
+        }
+      },
+      "id": "11c2c4ca-d6db-4618-b5a8-c509c0cbdcc0",
+      "name": "AI Agent",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 1.7,
+      "position": [
+        288,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "sessionIdType": "customKey",
+        "sessionKey": "voice-agent-session"
+      },
+      "id": "64dd710f-fd59-48af-8f76-c64602726d5c",
+      "name": "Conversation Memory",
+      "type": "@n8n/n8n-nodes-langchain.memoryBufferWindow",
+      "typeVersion": 1.3,
+      "position": [
+        352,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "name": "get_weather",
+        "description": "Get the current weather for a city. Input must be a JSON object like { \"city\": \"London\" }. Returns temperature in Celsius and a short condition.",
+        "jsCode": "// Tool: get_weather\n// The agent passes a query object; read the city it asked about.\nconst city = (query && (query.city || query.input || query.q)) || '';\nif (!city) {\n  return 'Please tell me which city you want the weather for.';\n}\n\n// 1) Geocode the city name to latitude/longitude (Open-Meteo, no API key).\nconst geoRes = await this.helpers.httpRequest({\n  method: 'GET',\n  url: 'https://geocoding-api.open-meteo.com/v1/search',\n  qs: { name: city, count: 1 },\n  json: true,\n});\n\nif (!geoRes || !geoRes.results || geoRes.results.length === 0) {\n  return `I couldn't find a place called ${city}.`;\n}\n\nconst place = geoRes.results[0];\nconst { latitude, longitude, name, country } = place;\n\n// 2) Fetch the current weather for those coordinates.\nconst wxRes = await this.helpers.httpRequest({\n  method: 'GET',\n  url: 'https://api.open-meteo.com/v1/forecast',\n  qs: { latitude, longitude, current_weather: true },\n  json: true,\n});\n\nconst cw = wxRes && wxRes.current_weather;\nif (!cw) {\n  return `I couldn't fetch the weather for ${name}.`;\n}\n\n// Map Open-Meteo weather codes to short words.\nconst codes = {\n  0: 'clear sky', 1: 'mostly clear', 2: 'partly cloudy', 3: 'overcast',\n  45: 'foggy', 48: 'foggy', 51: 'light drizzle', 53: 'drizzle', 55: 'heavy drizzle',\n  61: 'light rain', 63: 'rain', 65: 'heavy rain', 71: 'light snow', 73: 'snow',\n  75: 'heavy snow', 80: 'rain showers', 81: 'rain showers', 82: 'violent rain showers',\n  95: 'thunderstorm', 96: 'thunderstorm with hail', 99: 'severe thunderstorm'\n};\nconst condition = codes[cw.weathercode] || 'unknown conditions';\n\nreturn `The weather in ${name}, ${country} is ${cw.temperature} degrees Celsius with ${condition} and wind at ${cw.windspeed} km/h.`;\n"
+      },
+      "id": "612410ce-f3b5-4ef8-92b4-0ee0013b8f07",
+      "name": "get_weather",
+      "type": "@n8n/n8n-nodes-langchain.toolCode",
+      "typeVersion": 1.1,
+      "position": [
+        720,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "name": "create_todo",
+        "description": "Add a task to the user's todo list file. Input must be a JSON object like { \"task\": \"Buy milk\" }. Appends the task to todos.txt on the server and returns confirmation.",
+        "jsCode": "// Tool: create_todo\n// Appends the requested task to a todos file on the n8n host.\nconst fs = require('fs');\nconst path = require('path');\n\nconst task = (query && (query.task || query.todo || query.input)) || '';\nif (!task || !String(task).trim()) {\n  return 'Please tell me what task to add.';\n}\n\n// Folder to store todos. /tmp is writable in most n8n installs.\n// Change this path if you want todos saved elsewhere.\nconst dir = process.env.TODO_DIR || '/tmp/voice-agent';\nconst file = path.join(dir, 'todos.txt');\n\ntry {\n  fs.mkdirSync(dir, { recursive: true });\n  const stamp = new Date().toISOString();\n  const line = `[ ] ${String(task).trim()}  (added ${stamp})\\n`;\n  fs.appendFileSync(file, line, 'utf8');\n\n  // Count how many todos exist now, for a friendlier reply.\n  const count = fs.readFileSync(file, 'utf8').split('\\n').filter(Boolean).length;\n  return `Added \"${String(task).trim()}\" to your todo list. You now have ${count} item(s). Saved to ${file}.`;\n} catch (err) {\n  return `I couldn't save the todo: ${err.message}`;\n}\n"
+      },
+      "id": "40669262-fb5b-454f-9b35-635a1fd292a7",
+      "name": "create_todo",
+      "type": "@n8n/n8n-nodes-langchain.toolCode",
+      "typeVersion": 1.1,
+      "position": [
+        928,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { \"reply\": ($json.output || $json.text || \"\").toString() } }}",
+        "options": {
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Access-Control-Allow-Origin",
+                "value": "*"
+              },
+              {
+                "name": "Access-Control-Allow-Headers",
+                "value": "Content-Type"
+              },
+              {
+                "name": "Access-Control-Allow-Methods",
+                "value": "POST, OPTIONS"
+              }
+            ]
+          }
+        }
+      },
+      "id": "49268f2a-fec4-47b3-8894-c3bf5b57f592",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        592,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "model": "llama-3.3-70b-versatile",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatGroq",
+      "typeVersion": 1,
+      "position": [
+        160,
+        208
+      ],
+      "id": "1326c010-721e-4050-9d8e-9b676eb13ff6",
+      "name": "Groq Chat Model",
+      "credentials": {
+        "groqApi": {
+          "id": "PC8T7yvrOYjhWdPf",
+          "name": "Groq account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "=https://serpapi.com/search",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "q",
+              "value": "=={{ $json.query }}"
+            },
+            {
+              "name": "api_key",
+              "value": "846d743204345f2a2f6dbed725af202cb2b59ef8c0204191a6e6c5afeebb8719"
+            },
+            {
+              "name": "engine",
+              "value": "google"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequestTool",
+      "typeVersion": 4.4,
+      "position": [
+        496,
+        208
+      ],
+      "id": "c6da3822-1f1e-416b-81c7-feafcb4dbd77",
+      "name": "HTTP Request",
+      "notes": "Use this tool to search Google for current information, news, recent events, or anything that needs up to date information."
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Conversation Memory": {
+      "ai_memory": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_memory",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "get_weather": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "create_todo": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Groq Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Respond to Webhook": {
+      "main": [
+        []
+      ]
+    },
+    "HTTP Request": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  },
+  "versionId": "8d6bb814-0dfb-4eb0-9a30-7a64c9719c1a",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "3450406144530c4460e9ae099b37fcc551d524f99ce8b78d7e295166aa0d2824"
+  },
+  "nodeGroups": [],
+  "id": "su2fyhjN24smKMeZ",
+  "tags": []
+}
